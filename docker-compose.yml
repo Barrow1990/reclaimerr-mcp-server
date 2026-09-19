@@ -1,0 +1,30 @@
+services:
+  reclaimerr-mcp:
+    # Built and pushed by .github/workflows/ci.yml on every push to main.
+    # Use `build: .` instead (and drop this `image:` line) if you'd rather
+    # build locally from the Dockerfile — both work against this same file.
+    image: ghcr.io/barrow1990/reclaimerr-mcp-server:latest
+    container_name: reclaimerr-mcp
+    # RECLAIMERR_URL / RECLAIMERR_API_TOKEN / MCP_AUTH_TOKEN are loaded from these
+    # files directly (not via `environment: ${VAR}` substitution, which
+    # `docker compose` only resolves against a plain `.env` — never against
+    # a Dockhand-managed one). Both files are optional and load in order,
+    # so whichever is present wins; if both are present, .env.dockhand wins
+    # for any key it also sets. This lets the same compose file work for a
+    # plain `.env` (see .env.example) and for Dockhand, which writes its own
+    # `.env.dockhand` from whatever you configure in its UI for this stack.
+    env_file:
+      - path: .env
+        required: false
+      - path: .env.dockhand
+        required: false
+    environment:
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: 8941
+    ports:
+      # Bind only to the host's LAN-facing address if you want to be strict
+      # about which interface this is reachable on, e.g. "192.168.1.50:8941:8941".
+      # Do not put this behind any external/WAN-facing reverse proxy or port
+      # forward — it has no authentication.
+      - "8941:8941"
+    restart: unless-stopped
