@@ -560,3 +560,64 @@ def test_permanent_failure_at_startup_is_not_retried(fake_reclaimerr, with_auth,
 
     assert server.rules_state.status == "disabled"
     assert fake_reclaimerr.logins == logins_after_startup  # no retry loop, no login-limit burn
+
+
+# --- the log says which tools are available --------------------------------
+
+
+def test_log_lists_the_tools_and_why_a_group_is_missing(monkeypatch, capsys):
+    monkeypatch.setattr(server, "RECLAIMERR_API_TOKEN", "rcl_x")
+    monkeypatch.setattr(server, "_registered_tools", set())
+    monkeypatch.setattr(server, "rules_state", server.RulesState("disabled", "Reclaimerr rejected the username/password (HTTP 401)"))
+
+    server.sync_tools()
+
+    log = capsys.readouterr().err
+    assert "Tools available (10):" in log
+    assert "always : rules_status" in log
+    assert "list_candidates" in log and "run_task" in log
+    assert "rules  : none — Reclaimerr rejected the username/password (HTTP 401)" in log
+
+
+def test_log_lists_the_rules_tools_once_they_are_available(monkeypatch, capsys, rules_ready):
+    monkeypatch.setattr(server, "RECLAIMERR_API_TOKEN", "rcl_x")
+    monkeypatch.setattr(server, "_registered_tools", set())
+
+    server.sync_tools()
+
+    log = capsys.readouterr().err
+    assert "Tools available (16):" in log
+    assert "create_rule" in log and "delete_rule" in log
+    assert "none —" not in log
+
+
+def test_log_says_when_the_general_tools_are_off(monkeypatch, capsys, rules_ready):
+    monkeypatch.setattr(server, "RECLAIMERR_API_TOKEN", None)
+    monkeypatch.setattr(server, "_registered_tools", set())
+
+    server.sync_tools()
+
+    assert "general: none — RECLAIMERR_API_TOKEN is not set" in capsys.readouterr().err
+
+
+def test_log_is_quiet_when_nothing_changed(monkeypatch, capsys, rules_ready):
+    monkeypatch.setattr(server, "RECLAIMERR_API_TOKEN", "rcl_x")
+    server.sync_tools()
+    capsys.readouterr()
+
+    server.sync_tools()
+
+    assert capsys.readouterr().err == ""
+
+
+def test_log_reports_the_change_when_rules_tools_disappear(monkeypatch, capsys, rules_ready):
+    monkeypatch.setattr(server, "RECLAIMERR_API_TOKEN", "rcl_x")
+    server.sync_tools()
+    capsys.readouterr()
+
+    monkeypatch.setattr(server, "rules_state", server.RulesState("disabled", "account 'x' has role 'user'"))
+    server.sync_tools()
+
+    log = capsys.readouterr().err
+    assert "Tools available (10):" in log
+    assert "rules  : none — account 'x' has role 'user'" in log

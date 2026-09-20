@@ -802,6 +802,25 @@ _registered_tools: set[str] = set()
 _tools_lock = threading.Lock()
 
 
+def _log_tools() -> None:
+    """Log which tools are listed, and for an empty group, why. Call with `_tools_lock` held.
+
+    Runs whenever the listed set changes (startup, or the rules tools appearing or
+    disappearing), so the log always shows what a client connecting now would see.
+    """
+    general = [tool.__name__ for tool in GENERAL_TOOLS if tool.__name__ in _registered_tools]
+    rules = [tool.__name__ for tool in RULES_TOOLS if tool.__name__ in _registered_tools]
+    general_line = ", ".join(general) if general else "none — RECLAIMERR_API_TOKEN is not set"
+    rules_line = ", ".join(rules) if rules else f"none — {rules_state.reason or rules_state.status}"
+    print(
+        f"Tools available ({len(_registered_tools)}):\n"
+        f"  always : {rules_status.__name__}\n"
+        f"  general: {general_line}\n"
+        f"  rules  : {rules_line}",
+        file=sys.stderr,
+    )
+
+
 def sync_tools() -> None:
     """Make the listed tools match the configuration and the rules check outcome.
 
@@ -815,6 +834,7 @@ def sync_tools() -> None:
         if rules_state.status == "ready":
             wanted.update({tool.__name__: tool for tool in RULES_TOOLS})
 
+        before = set(_registered_tools)
         for name in sorted(_registered_tools - wanted.keys()):
             mcp.remove_tool(name)
             _registered_tools.discard(name)
@@ -822,6 +842,8 @@ def sync_tools() -> None:
             if name not in _registered_tools:
                 mcp.add_tool(tool)
                 _registered_tools.add(name)
+        if _registered_tools != before:
+            _log_tools()
 
 
 def _log_rules_state(prefix: str) -> None:

@@ -126,6 +126,17 @@ hung Reclaimerr can never stop the server (or the general tools) coming up:
 MCP clients read the tool list when they connect, so **reconnect the client**
 after a fix.
 
+**The log shows exactly what's available.** At startup, and again whenever the
+list changes (for example the rules tools appearing after an unreachable start),
+the server logs every listed tool and, for an empty group, why:
+
+```
+Tools available (10):
+  always : rules_status
+  general: list_candidates, candidate_status, protect_candidate, ..., system_status
+  rules  : none — Reclaimerr rejected the username/password (HTTP 401)
+```
+
 **Sessions.** The login cookie lasts about 24 hours. On a `401` the server logs
 in again and retries the request once (never in a loop — Reclaimerr rate-limits
 login), so the expiry is invisible to you. Credentials are held only in the
