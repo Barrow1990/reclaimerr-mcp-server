@@ -1,0 +1,31 @@
+# Side-by-side TEST deployment of whatever branch is checked out, next to the
+# production stack. Point a Dockhand git stack (or `docker compose -f`) at THIS
+# file instead of docker-compose.yml.
+#
+# Differences from docker-compose.yml, and why:
+#   - `build: .` instead of the GHCR image. CI only publishes :latest from main, so
+#     the registry image never contains an unmerged branch's code.
+#   - its own container name and host port (8943), so it can run alongside the
+#     production container (`reclaimerr-mcp`, port 8941) instead of clashing with it.
+#
+# Credentials load exactly like the production file (.env, or the .env.dockhand that
+# Dockhand writes from its UI). NOTE: compose interpolates `$` in those files, so a
+# value containing `$` (e.g. a password like `abc$Xy1`) is silently truncated; write
+# `$$` for a literal `$`, or avoid `$` in passwords.
+services:
+  reclaimerr-mcp-test:
+    build: .
+    container_name: reclaimerr-mcp-test
+    env_file:
+      - path: .env
+        required: false
+      - path: .env.dockhand
+        required: false
+    environment:
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: 8941
+    ports:
+      # Host 8943 -> container 8941. Bind to a LAN address if you want to be strict,
+      # e.g. "192.168.1.50:8943:8941". Never expose this outside your network.
+      - "8943:8941"
+    restart: unless-stopped

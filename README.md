@@ -113,7 +113,9 @@ a **session cookie**, not an API token, so this server logs in itself.
   try them on something you can afford to get wrong first.
 
 **Startup check.** On startup the server logs in and checks the account is an
-admin and can read `/api/rules`, then lists tools accordingly:
+admin and can read `/api/rules`, then lists tools accordingly. The check runs in
+a background thread and startup waits at most 10 seconds for it, so a slow or
+hung Reclaimerr can never stop the server (or the general tools) coming up:
 
 | Outcome | Rules tools | What happens |
 |---|---|---|
@@ -225,6 +227,19 @@ docker compose up -d --pull always
 
 The server is then reachable at `http://<docker-host>:8941/mcp` from anything
 on your internal network.
+
+**Passwords and `$`.** Docker Compose interpolates `$` in `.env` /
+`.env.dockhand` values, so a password like `abc$Xy1` silently becomes `abc` (with
+a `variable "Xy1" is not set` warning) and the login then fails. Write `$$` for a
+literal `$`, or avoid `$` in the password. The startup check reports the resulting
+"rejected the username/password" clearly, in the log and in `rules_status`.
+
+**Trying a branch before merging.** CI only publishes `:latest` from `main`, so
+the registry image never contains an unmerged branch. Deploy
+[`docker-compose.test.yml`](docker-compose.test.yml) instead (in a Dockhand git
+stack, set the compose path to it): it builds the branch from the `Dockerfile`
+and runs as `reclaimerr-mcp-test` on host port `8943`, so it sits next to the
+production container instead of clashing with its name and port.
 
 ## Managing with Dockhand
 

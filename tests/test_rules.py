@@ -7,6 +7,8 @@ conftest.py, which stands in for Reclaimerr's cookie-authenticated /api routes.
 """
 
 import asyncio
+import threading
+import time
 
 import httpx
 import pytest
@@ -469,3 +471,92 @@ def test_delete_applied_when_approved(fake_reclaimerr, rules_ready):
 def test_delete_missing_rule(fake_reclaimerr, rules_ready):
     with pytest.raises(ToolError, match="Rule 9 not found"):
         server.delete_rule(9, approval=APPROVED)
+
+
+# --- startup: the check must never hold the server up -----------------------
+
+
+def wait_for(condition, seconds: float = 3.0) -> bool:
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if condition():
+            return True
+        time.sleep(0.02)
+    return False
+
+
+def test_initialize_lists_rules_tools_before_returning_when_check_is_fast(fake_reclaimerr, with_auth, monkeypatch):
+    monkeypatch.setattr(server, "RECLAIMERR_API_TOKEN", "rcl_x")
+
+    server.initialize()
+
+    assert server.rules_state.status == "ready"
+    assert RULES <= listed_tools()
+
+
+def test_initialize_does_not_wait_for_a_hung_reclaimerr(with_auth, monkeypatch):
+    release = threading.Event()
+
+    def hung(request):
+        release.wait(5)  # a Reclaimerr that accepts the connection and never answers
+        return httpx.Response(500)
+
+    monkeypatch.setattr(
+        server,
+        "session",
+        httpx.Client(base_url=f"{server.RECLAIMERR_URL}/api", transport=httpx.MockTransport(hung)),
+    )
+    monkeypatch.setattr(server, "STARTUP_CHECK_WAIT_SECONDS", 0.2)
+    monkeypatch.setattr(server, "RECLAIMERR_API_TOKEN", "rcl_x")
+
+    started = time.monotonic()
+    try:
+        server.initialize()
+        elapsed = time.monotonic() - started
+
+        assert elapsed < 2  # returned long before the 5s hang ended
+        assert server.rules_state.status == "pending"
+        assert GENERAL <= listed_tools()  # the general tools are up regardless
+        assert not RULES & listed_tools()
+    finally:
+        release.set()  # let the background thread finish
+
+
+def test_initialize_disabled_config_needs_no_network(monkeypatch, no_auth):
+    def handler(request):
+        raise AssertionError("no network call expected")
+
+    monkeypatch.setattr(
+        server,
+        "session",
+        httpx.Client(base_url=f"{server.RECLAIMERR_URL}/api", transport=httpx.MockTransport(handler)),
+    )
+    server.initialize()
+    assert server.rules_state.status == "disabled"
+
+
+def test_unreachable_at_startup_is_retried_and_tools_appear_once_it_recovers(fake_reclaimerr, with_auth, monkeypatch):
+    monkeypatch.setattr(server, "RECLAIMERR_API_TOKEN", "rcl_x")
+    monkeypatch.setattr(server, "RULES_RECHECK_SECONDS", 0.05)
+    fake_reclaimerr.login_status = 503  # Reclaimerr is still booting
+
+    server.initialize()
+    assert server.rules_state.status == "pending"
+    assert not RULES & listed_tools()
+
+    fake_reclaimerr.login_status = 200  # ...and now it's up
+
+    assert wait_for(lambda: server.rules_state.status == "ready")
+    assert wait_for(lambda: RULES <= listed_tools())
+
+
+def test_permanent_failure_at_startup_is_not_retried(fake_reclaimerr, with_auth, monkeypatch):
+    monkeypatch.setattr(server, "RULES_RECHECK_SECONDS", 0.05)
+    fake_reclaimerr.role = "user"
+
+    server.initialize()
+    logins_after_startup = fake_reclaimerr.logins
+    time.sleep(0.3)
+
+    assert server.rules_state.status == "disabled"
+    assert fake_reclaimerr.logins == logins_after_startup  # no retry loop, no login-limit burn

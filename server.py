@@ -134,6 +134,8 @@ SESSION_COOKIE = "access_token"
 # Reclaimerr rate-limits login to 5/minute, so a retry after an unreachable
 # startup waits far longer than that; one check per interval can never trip it.
 RULES_RECHECK_SECONDS = 300
+# How long startup waits for the first rules check before serving anyway.
+STARTUP_CHECK_WAIT_SECONDS = 10
 
 INSTRUCTIONS = (
     "Tools for Reclaimerr, a media-library cleanup app. Call rules_status first if you are unsure "
@@ -796,6 +798,8 @@ GENERAL_TOOLS = (
 RULES_TOOLS = (list_rules, get_rule, preview_rule, create_rule, update_rule, delete_rule)
 
 _registered_tools: set[str] = set()
+# sync_tools runs from the startup thread and from build_app, so serialise it.
+_tools_lock = threading.Lock()
 
 
 def sync_tools() -> None:
@@ -804,38 +808,62 @@ def sync_tools() -> None:
     General tools need RECLAIMERR_API_TOKEN; rules tools need the check to have passed;
     `rules_status` is always listed so the AI can find out why something is missing.
     """
-    wanted: dict[str, Any] = {rules_status.__name__: rules_status}
-    if RECLAIMERR_API_TOKEN:
-        wanted.update({tool.__name__: tool for tool in GENERAL_TOOLS})
-    if rules_state.status == "ready":
-        wanted.update({tool.__name__: tool for tool in RULES_TOOLS})
+    with _tools_lock:
+        wanted: dict[str, Any] = {rules_status.__name__: rules_status}
+        if RECLAIMERR_API_TOKEN:
+            wanted.update({tool.__name__: tool for tool in GENERAL_TOOLS})
+        if rules_state.status == "ready":
+            wanted.update({tool.__name__: tool for tool in RULES_TOOLS})
 
-    for name in sorted(_registered_tools - wanted.keys()):
-        mcp.remove_tool(name)
-        _registered_tools.discard(name)
-    for name, tool in wanted.items():
-        if name not in _registered_tools:
-            mcp.add_tool(tool)
-            _registered_tools.add(name)
+        for name in sorted(_registered_tools - wanted.keys()):
+            mcp.remove_tool(name)
+            _registered_tools.discard(name)
+        for name, tool in wanted.items():
+            if name not in _registered_tools:
+                mcp.add_tool(tool)
+                _registered_tools.add(name)
 
 
-def _recheck_rules_until_settled() -> None:
-    """Background loop: retry the rules check while Reclaimerr was unreachable at startup."""
+def _log_rules_state(prefix: str) -> None:
+    reason = f" — {rules_state.reason}" if rules_state.reason else ""
+    print(f"{prefix}: {rules_state.status}{reason}", file=sys.stderr)
+
+
+def _check_and_retry_rules(first_check_done: threading.Event) -> None:
+    """Background worker: the startup rules check, then retries while Reclaimerr is unreachable."""
+    check_rules_access()
+    sync_tools()
+    _log_rules_state("Rules tools")
+    first_check_done.set()
     while rules_state.status == "pending":
         time.sleep(RULES_RECHECK_SECONDS)
         check_rules_access()
         sync_tools()
-        print(f"Rules tools re-check: {rules_state.status} {rules_state.reason or ''}".rstrip(), file=sys.stderr)
+        _log_rules_state("Rules tools re-check")
 
 
 def initialize() -> None:
-    """Run the startup rules check, list the matching tools, and keep retrying if unreachable."""
-    check_rules_access()
-    sync_tools()
-    reason = f" — {rules_state.reason}" if rules_state.reason else ""
-    print(f"Rules tools: {rules_state.status}{reason}", file=sys.stderr)
-    if rules_state.status == "pending":
-        threading.Thread(target=_recheck_rules_until_settled, name="rules-recheck", daemon=True).start()
+    """Start the rules check without letting it hold up the server.
+
+    The check runs in a background thread, because a Reclaimerr that hangs (or a
+    resolver that stalls) must not stop the general tools from coming up. Startup
+    waits up to STARTUP_CHECK_WAIT_SECONDS for the first result, so in the normal,
+    fast case the rules tools are already listed when the first client connects;
+    if it is slower, the state is "pending" and they appear when the check finishes
+    (clients see them on their next connect).
+    """
+    global rules_state
+    rules_state = RulesState("pending", "startup check still running")
+    first_check_done = threading.Event()
+    threading.Thread(
+        target=_check_and_retry_rules, args=(first_check_done,), name="rules-check", daemon=True
+    ).start()
+    if not first_check_done.wait(STARTUP_CHECK_WAIT_SECONDS):
+        print(
+            f"Rules check still running after {STARTUP_CHECK_WAIT_SECONDS}s; starting the server without waiting",
+            file=sys.stderr,
+        )
+        sync_tools()
 
 
 # Paths that must stay reachable without MCP_AUTH_TOKEN, so Docker's own
