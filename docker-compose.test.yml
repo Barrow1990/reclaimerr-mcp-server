@@ -15,9 +15,12 @@
 services:
   reclaimerr-mcp-test:
     build: .
-    # Rebuild on every deploy. A bare `build: .` only builds when no image exists, so
-    # redeploying after a push silently keeps running the OLD code while the git sync
-    # reports the new commit. Layer caching keeps this quick when nothing changed.
+    # A bare `build: .` only builds when no image exists, so a redeploy after a push keeps
+    # running the OLD code while the git sync reports the new commit. `pull_policy: build`
+    # makes a plain `docker compose up -d` rebuild. BUT any `--pull` flag on `up` overrides
+    # it, and a Dockhand redeploy did not rebuild despite it. After pushing, remove the
+    # image first, so the deploy has to build:
+    #   docker rm -f reclaimerr-mcp-test && docker rmi <stack-name>-reclaimerr-mcp-test
     pull_policy: build
     container_name: reclaimerr-mcp-test
     env_file:

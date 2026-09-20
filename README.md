@@ -281,6 +281,19 @@ stack, set the compose path to it): it builds the branch from the `Dockerfile`
 and runs as `reclaimerr-mcp-test` on host port `8943`, so it sits next to the
 production container instead of clashing with its name and port.
 
+**After every push, remove the built image before redeploying.** Compose only
+builds when no image exists, so a plain redeploy reuses the old build even though
+the git sync reports the new commit (verified: Dockhand showed a new commit as
+"synced" while the container still ran the previous code). `pull_policy: build` in
+the test file fixes this for a plain `docker compose up -d`, but any `--pull` flag
+overrides it, and a Dockhand redeploy still reused the image. So:
+
+```bash
+docker rm -f reclaimerr-mcp-test && docker rmi <stack-name>-reclaimerr-mcp-test
+# then redeploy the stack; it has to build. Confirm the new code is running:
+docker logs reclaimerr-mcp-test | grep "Tools available"
+```
+
 ## Managing with Dockhand
 
 Point Dockhand at `ghcr.io/barrow1990/reclaimerr-mcp-server` and let it track
