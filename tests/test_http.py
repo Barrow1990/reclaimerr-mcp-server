@@ -49,6 +49,8 @@ def test_ready_success(mock_reclaimerr, no_auth):
             "apiVersion": "v1",
             "capabilities": ["candidate-lifecycle"],
         },
+        # A rules problem never makes /ready unhealthy; it is only reported.
+        "rules": {"enabled": False, "status": "disabled", "reason": "not checked in tests", "account": None},
     }
 
 
@@ -169,3 +171,62 @@ def test_auth_token_does_not_block_health_or_ready(mock_reclaimerr, with_auth):
     with TestClient(server.build_app()) as client:
         assert client.get("/health").status_code == 200
         assert client.get("/ready").status_code == 200
+
+
+def test_ready_reports_rules_state_without_affecting_health(mock_reclaimerr, no_auth, monkeypatch):
+    mock_reclaimerr(lambda req: httpx.Response(200, json={"version": "0.4.7", "api_version": "v1"}))
+    monkeypatch.setattr(
+        server, "rules_state", server.RulesState("disabled", "account 'x' has role 'user'", "x")
+    )
+
+    with TestClient(server.build_app()) as client:
+        response = client.get("/ready")
+
+    assert response.status_code == 200
+    assert response.json()["rules"]["reason"] == "account 'x' has role 'user'"
+
+
+def test_ready_includes_rules_state_on_failure_too(mock_reclaimerr, no_auth):
+    mock_reclaimerr(lambda req: httpx.Response(401, json={"detail": "Invalid API token"}))
+
+    with TestClient(server.build_app()) as client:
+        response = client.get("/ready")
+
+    assert response.status_code == 503
+    assert response.json()["rules"]["status"] == "disabled"
+
+
+def test_ready_rules_only_mode_ok_when_rules_ready(monkeypatch, rules_ready):
+    monkeypatch.setattr(server, "RECLAIMERR_API_TOKEN", None)
+
+    with TestClient(server.build_app()) as client:
+        response = client.get("/ready")
+
+    body = response.json()
+    assert response.status_code == 200
+    assert body["status"] == "ok"
+    assert body["rules"]["enabled"] is True
+
+
+def test_ready_rules_only_mode_unhealthy_when_rules_disabled(monkeypatch, with_auth):
+    monkeypatch.setattr(server, "RECLAIMERR_API_TOKEN", None)
+    monkeypatch.setattr(server, "rules_state", server.RulesState("disabled", "wrong password"))
+
+    with TestClient(server.build_app()) as client:
+        response = client.get("/ready")
+
+    body = response.json()
+    assert response.status_code == 503
+    assert body["error"] == "wrong password"
+    assert body["reachable"] is True
+
+
+def test_ready_rules_only_mode_reports_unreachable_while_pending(monkeypatch, with_auth):
+    monkeypatch.setattr(server, "RECLAIMERR_API_TOKEN", None)
+    monkeypatch.setattr(server, "rules_state", server.RulesState("pending", "cannot reach Reclaimerr"))
+
+    with TestClient(server.build_app()) as client:
+        response = client.get("/ready")
+
+    assert response.status_code == 503
+    assert response.json()["reachable"] is False
