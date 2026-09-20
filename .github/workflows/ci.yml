@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   pull_request:
-    branches: [main]
+    branches: [main, dev]
 
 jobs:
   test:
@@ -27,7 +27,7 @@ jobs:
 
   docker:
     needs: test
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -51,13 +51,31 @@ jobs:
       - name: Compute lowercase image name
         run: echo "IMAGE=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
 
+      # `dev` builds publish only :dev and :dev-<sha>; they never touch :latest (or any
+      # other release tag), so the production stack can't pick up an unmerged build.
+      - name: Compute image tags
+        run: |
+          if [ "${GITHUB_REF}" = "refs/heads/dev" ]; then
+            {
+              echo 'TAGS<<EOF'
+              echo "${IMAGE}:dev"
+              echo "${IMAGE}:dev-${GITHUB_SHA}"
+              echo 'EOF'
+            } >> "$GITHUB_ENV"
+          else
+            {
+              echo 'TAGS<<EOF'
+              echo "${IMAGE}:latest"
+              echo "${IMAGE}:${GITHUB_SHA}"
+              echo 'EOF'
+            } >> "$GITHUB_ENV"
+          fi
+
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
           context: .
           push: true
-          tags: |
-            ${{ env.IMAGE }}:latest
-            ${{ env.IMAGE }}:${{ github.sha }}
+          tags: ${{ env.TAGS }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
