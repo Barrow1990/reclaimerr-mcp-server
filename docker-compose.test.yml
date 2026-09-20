@@ -15,6 +15,10 @@
 services:
   reclaimerr-mcp-test:
     build: .
+    # Rebuild on every deploy. A bare `build: .` only builds when no image exists, so
+    # redeploying after a push silently keeps running the OLD code while the git sync
+    # reports the new commit. Layer caching keeps this quick when nothing changed.
+    pull_policy: build
     container_name: reclaimerr-mcp-test
     env_file:
       - path: .env
