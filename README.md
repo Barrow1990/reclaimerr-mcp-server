@@ -228,11 +228,40 @@ docker compose up -d --pull always
 The server is then reachable at `http://<docker-host>:8941/mcp` from anything
 on your internal network.
 
-**Passwords and `$`.** Docker Compose interpolates `$` in `.env` /
-`.env.dockhand` values, so a password like `abc$Xy1` silently becomes `abc` (with
-a `variable "Xy1" is not set` warning) and the login then fails. Write `$$` for a
-literal `$`, or avoid `$` in the password. The startup check reports the resulting
-"rejected the username/password" clearly, in the log and in `rules_status`.
+### Passwords, tokens and `$`
+
+Docker Compose treats `$` in `.env` / `.env.dockhand` values as the start of a
+variable reference, so a secret containing `$` is **silently truncated** — the
+server still starts, it just receives the wrong value. This affects every secret
+here (`RECLAIMERR_PASSWORD` most of all, since people choose those by hand).
+What a container actually receives for `abc$Xy1def` (checked with Docker Compose
+5.5.1 by printing the environment inside a real container):
+
+| Written in the env file | Container receives | |
+|---|---|---|
+| `abc$Xy1def` | `abc` | ❌ everything from the `$` on is lost |
+| `"abc$Xy1def"` (double quotes) | `abc` | ❌ double quotes still interpolate |
+| `abc$$Xy1def` | `abc$Xy1def` | ✅ `$$` is a literal `$` |
+| `'abc$Xy1def'` (single quotes) | `abc$Xy1def` | ✅ single quotes are literal |
+| `"abc\$Xy1def"` | `abc$Xy1def` | ✅ backslash-escaped |
+| `abcdef$` (`$` is the last character) | `abcdef$` | ✅ nothing follows it to be read as a name |
+
+The safest fix is a password **without `$`**. If you keep one, use `$$` or single
+quotes as above.
+
+How to recognise it:
+
+- `docker compose` prints `The "Xy1" variable is not set. Defaulting to a blank string.`
+- The rules tools stay hidden and `rules_status` / `GET /ready` (`rules.reason`) /
+  the startup log say `Reclaimerr rejected the username/password (HTTP 401)`.
+- The container's variable is shorter than the real password.
+
+**Each place you keep a copy is separate.** A Dockhand stack has its own
+`.env` / `.env.dockhand` (written from its UI), and a manual `docker compose up`
+reads the `.env` beside the compose file. Fixing the password in one does not fix
+the others, and Dockhand rewrites `.env.dockhand` from its own settings on each
+deploy. How Dockhand's UI treats `$$` hasn't been tested here, so prefer a
+password without `$` there, then confirm with `GET /ready`.
 
 **Trying a branch before merging.** CI only publishes `:latest` from `main`, so
 the registry image never contains an unmerged branch. Deploy
