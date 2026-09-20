@@ -371,6 +371,21 @@ python -m pytest tests/ -v
 CI (`.github/workflows/ci.yml`) runs the mocked suite on every push/PR; the
 GHCR build only runs after it passes.
 
+## Branch flow
+
+`main` and `dev` are protected branches.
+
+- **`dev`** is where changes land first. It can't be force-pushed or deleted. Every push
+  to `dev` runs the tests and publishes `ghcr.io/barrow1990/reclaimerr-mcp-server:dev` (never `:latest`).
+- **`main`** only changes through a pull request **from `dev`**. Direct pushes are
+  blocked (for admins too), the `test` check must pass, and the `source-branch` check
+  ([`enforce-dev-to-main.yml`](.github/workflows/enforce-dev-to-main.yml)) fails any
+  pull request into `main` that comes from another branch or from a fork. Merging is
+  what publishes `:latest`.
+- Merge `dev` into `main` with a **merge commit**, not squash or rebase: squashing
+  rewrites `dev`'s history, so `dev` and `main` diverge and every later pull
+  request hits conflicts.
+
 ## License
 
 MIT
